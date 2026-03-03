@@ -10,7 +10,7 @@ import numpy as np
 # 1. إعدادات الصفحة
 st.set_page_config(page_title="Chemical Isomer Analysis", layout="wide")
 
-# 2. النوت العلمية بالستايل المطلوب
+# 2. النوت العلمية (المرجع الخاص بك)
 st.markdown("""
 <div style="background-color: #fdf2f2; padding: 15px; border-radius: 10px; border-left: 5px solid #800000; margin-bottom: 20px;">
     <strong style="color: #800000; font-size: 1.2em;">Stereoisomerism Reference Guide:</strong><br>
@@ -26,29 +26,48 @@ st.markdown("""
 
 st.markdown("<h2 style='color: #800000; font-family: serif; border-bottom: 2px solid #dcdde1;'>Professional Isomer Analysis System</h2>", unsafe_allow_html=True)
 
-# 3. دالة الرسم (تظهر R/S وتخفي النصوص الخارجية)
+# 3. دالة الرسم الاحترافية (تطبق قواعد النوتس الثلاثة)
 def render_smart_2d(mol):
     if mol is None: return None
     
     m = Chem.Mol(mol)
-    is_allene = m.HasSubstructMatch(Chem.MolFromSmarts("C=C=C"))
+    # تفعيل حسابات الكيمياء الفراغية
+    Chem.AssignStereochemistry(m, force=True, cleanIt=True)
     
-    # إضافة الهيدروجين ضروري للألين لظهور الـ Wedges
+    is_allene = m.HasSubstructMatch(Chem.MolFromSmarts("C=C=C"))
     m = Chem.AddHs(m) if is_allene else Chem.RemoveHs(m)
     
-    # توليد الإحداثيات والـ Wedges
+    # محاولة توليد إحداثيات لضبط الـ Wedges
     if AllChem.EmbedMolecule(m, maxAttempts=5000, randomSeed=42) != -1:
         AllChem.Compute2DCoords(m)
         Chem.WedgeMolBonds(m, m.GetConformer())
     else:
         AllChem.Compute2DCoords(m)
 
+    # تطبيق تسميات Cis/Trans و E/Z يدوياً بناءً على النوتس
+    for bond in m.GetBonds():
+        if bond.GetBondType() == Chem.BondType.DOUBLE:
+            stereo = bond.GetStereo()
+            # القاعدة 1: Cis / Trans
+            if stereo == Chem.BondStereo.STEREOCIS:
+                bond.SetProp("bondNote", "Cis")
+            elif stereo == Chem.BondStereo.STEREOTRANS:
+                bond.SetProp("bondNote", "Trans")
+            # القاعدة 2: E / Z
+            elif stereo == Chem.BondStereo.STEREOE:
+                bond.SetProp("bondNote", "E")
+            elif stereo == Chem.BondStereo.STEREOZ:
+                bond.SetProp("bondNote", "Z")
+
     d_opts = Draw.MolDrawOptions()
     
-    # إظهار R/S و Ra/Sa داخل الرسمة
+    # القاعدة 3 و 4: إظهار R/S و Ra/Sa فوق الذرات
     d_opts.addStereoAnnotation = True 
     
-    # إخفاء النصوص الخارجية (Legend) تماماً
+    # تفعيل إظهار نصوص الروابط (Cis/Trans/E/Z)
+    d_opts.addBondLabelAnnotations = True 
+    
+    # إخفاء النصوص الخارجية (Legend)
     d_opts.legendFontSize = 0 
     
     if is_allene:
@@ -58,11 +77,10 @@ def render_smart_2d(mol):
         d_opts.bondLineWidth = 1.6
         d_opts.minFontSize = 14
 
-    # نرسل الـ legend كـ string فارغ لإزالة أي اسم مخفي
     img = Draw.MolToImage(m, size=(500, 500), options=d_opts, legend="")
     return img
 
-# 4. دالة حساب Ra/Sa للألين برمجياً (للعنوان فقط)
+# 4. دالة حساب Ra/Sa للألين برمجياً (للعنوان)
 def get_allene_stereo(mol):
     try:
         m = Chem.AddHs(mol)
@@ -85,8 +103,8 @@ def get_allene_stereo(mol):
     except: return ""
     return ""
 
-# 5. المدخلات (تبدأ فارغة)
-name = st.text_input("Enter Structure Name (e.g., 2,3-pentadiene or Glucose):", value="")
+# 5. واجهة المستخدم
+name = st.text_input("Enter Structure Name (e.g., Cis-2-butene, Glucose, 2,3-pentadiene):", value="")
 
 if st.button("Analyze & Visualize") and name:
     try:
@@ -95,7 +113,6 @@ if st.button("Analyze & Visualize") and name:
             base_mol = Chem.MolFromSmiles(results[0].smiles)
             pattern = Chem.MolFromSmarts("C=C=C")
             
-            # معالجة الألين يدوياً لضمان التعرف على الكيرالية المحورية
             if base_mol.HasSubstructMatch(pattern):
                 for match in base_mol.GetSubstructMatches(pattern):
                     base_mol.GetAtomWithIdx(match[0]).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
@@ -103,7 +120,6 @@ if st.button("Analyze & Visualize") and name:
             opts = StereoEnumerationOptions(tryEmbedding=True, onlyUnassigned=False)
             isomers = list(EnumerateStereoisomers(base_mol, options=opts))
             
-            # ضمان وجود أيزومرين في حالة الألين المسطح
             if len(isomers) == 1 and base_mol.HasSubstructMatch(pattern):
                 iso2 = Chem.Mol(isomers[0])
                 for a in iso2.GetAtoms():
@@ -121,19 +137,15 @@ if st.button("Analyze & Visualize") and name:
                     iso.ClearComputedProps()
                     Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
                     
-                    # الحصول على النوع (Ra/Sa) للألين أو (R/S) للعادي
-                    axial = get_allene_stereo(iso)
-                    if i > 0 and axial in isomers_names:
-                        axial = "Sa" if isomers_names[0] == "Ra" else "Ra"
-                    isomers_names.append(axial)
+                    label = get_allene_stereo(iso)
+                    if i > 0 and label in isomers_names:
+                        label = "Sa" if isomers_names[0] == "Ra" else "Ra"
+                    isomers_names.append(label)
 
-                    # كتابة النوع فوق الصورة (خارج إطار الرسمة)
-                    st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{axial}</span>", unsafe_allow_html=True)
-                    
-                    # الرسم الـ 2D المطور (الذي يحتوي على R/S و Wedges فقط)
+                    st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{label}</span>", unsafe_allow_html=True)
                     st.image(render_smart_2d(iso), use_container_width=True)
                     
-                    # العرض الـ 3D
+                    # عرض 3D
                     m3d = Chem.AddHs(iso)
                     if AllChem.EmbedMolecule(m3d, maxAttempts=2000) != -1:
                         mblock = Chem.MolToMolBlock(m3d)
@@ -145,4 +157,4 @@ if st.button("Analyze & Visualize") and name:
         else:
             st.error("Compound not found.")
     except Exception as e:
-        st.error(f"Something went wrong: {e}")
+        st.error(f"Error: {e}")
