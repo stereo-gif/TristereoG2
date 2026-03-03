@@ -1,0 +1,7 @@
+rdkit
+pubchempy
+py3Dmol
+stmol
+numpy
+ipywidgets
+ipython_genutils
