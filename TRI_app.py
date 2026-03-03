@@ -10,7 +10,7 @@ import numpy as np
 # 1. إعدادات الصفحة
 st.set_page_config(page_title="Chemical Isomer Analysis", layout="wide")
 
-# 2. النوت العلمية (المرجع الخاص بك)
+# 2. النوت العلمية
 st.markdown("""
 <div style="background-color: #fdf2f2; padding: 15px; border-radius: 10px; border-left: 5px solid #800000; margin-bottom: 20px;">
     <strong style="color: #800000; font-size: 1.2em;">Stereoisomerism Reference Guide:</strong><br>
@@ -23,19 +23,24 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# دالة لتحديد نوع الرابطة المزدوجة (Cis/Trans أو E/Z) للعنوان
-def get_bond_stereo_label(mol):
+# دالة ذكية لاستخراج مسمى Cis/Trans أو E/Z للعنوان
+def get_detailed_stereo_label(mol):
+    # إجبار RDKit على إيجاد مراكز الـ Stereo في الروابط
+    si = Chem.FindPotentialStereoBonds(mol)
     labels = []
     for bond in mol.GetBonds():
         if bond.GetBondType() == Chem.BondType.DOUBLE:
             stereo = bond.GetStereo()
+            
+            # محاولة قراءة المسمى المباشر
             if stereo == Chem.BondStereo.STEREOCIS: labels.append("Cis")
             elif stereo == Chem.BondStereo.STEREOTRANS: labels.append("Trans")
             elif stereo == Chem.BondStereo.STEREOE: labels.append("E")
             elif stereo == Chem.BondStereo.STEREOZ: labels.append("Z")
+            
     return " / ".join(labels) if labels else ""
 
-# 3. دالة الرسم (R/S فقط داخل الرسمة)
+# 3. دالة الرسم (R/S تظهر داخل الرسمة فقط)
 def render_smart_2d(mol):
     if mol is None: return None
     m = Chem.Mol(mol)
@@ -49,7 +54,7 @@ def render_smart_2d(mol):
         AllChem.Compute2DCoords(m)
 
     d_opts = Draw.MolDrawOptions()
-    d_opts.addStereoAnnotation = True # لإظهار R/S و Ra/Sa جوه الرسمة
+    d_opts.addStereoAnnotation = True  # لإظهار R/S و Ra/Sa
     d_opts.legendFontSize = 0 
     
     if is_allene:
@@ -91,9 +96,14 @@ name = st.text_input("Enter Structure Name:", value="")
 if st.button("Analyze & Visualize") and name:
     results = pcp.get_compounds(name, 'name')
     if results:
-        base_mol = Chem.MolFromSmiles(results[0].smiles)
-        pattern = Chem.MolFromSmarts("C=C=C")
+        # تحويل الـ SMILES لموليكيول مع الحفاظ على كيمياء الروابط
+        smiles = results[0].smiles
+        base_mol = Chem.MolFromSmiles(smiles)
         
+        # تفعيل كيمياء الروابط المزدوجة
+        Chem.AssignStereochemistry(base_mol, force=True, cleanIt=True)
+        
+        pattern = Chem.MolFromSmarts("C=C=C")
         if base_mol.HasSubstructMatch(pattern):
             for match in base_mol.GetSubstructMatches(pattern):
                 base_mol.GetAtomWithIdx(match[0]).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
@@ -101,7 +111,7 @@ if st.button("Analyze & Visualize") and name:
         opts = StereoEnumerationOptions(tryEmbedding=True, onlyUnassigned=False)
         isomers = list(EnumerateStereoisomers(base_mol, options=opts))
         
-        # حالة الألين
+        # تصحيح للألينات لو لم يتم توليد أيزومرين
         if len(isomers) == 1 and base_mol.HasSubstructMatch(pattern):
             iso2 = Chem.Mol(isomers[0])
             for a in iso2.GetAtoms():
@@ -115,22 +125,23 @@ if st.button("Analyze & Visualize") and name:
         
         for i, iso in enumerate(isomers):
             with cols[i]:
+                # مسح الحسابات القديمة وإعادة الحساب بدقة لكل أيزومر
                 iso.ClearComputedProps()
                 Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
                 
-                # تحديد العناوين بناءً على القواعد
-                axial_label = get_allene_stereo(iso) # للألين (Ra/Sa)
-                bond_label = get_bond_stereo_label(iso) # للـ Cis/Trans أو E/Z
+                # جلب العنوان (Cis/Trans أو E/Z)
+                bond_label = get_detailed_stereo_label(iso)
+                # جلب عنوان الألين (Ra/Sa)
+                axial_label = get_allene_stereo(iso)
                 
-                # دمج العناوين للعرض تحت Isomer X
-                display_label = axial_label if axial_label else bond_label
+                # الأولوية للعنوان المتاح
+                final_label = axial_label if axial_label else bond_label
                 
-                st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{display_label}</span>", unsafe_allow_html=True)
+                st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{final_label}</span>", unsafe_allow_html=True)
                 
-                # الرسم (R/S تظهر هنا تلقائياً لو موجودة)
                 st.image(render_smart_2d(iso), use_container_width=True)
                 
-                # 3D View
+                # 3D
                 m3d = Chem.AddHs(iso)
                 if AllChem.EmbedMolecule(m3d, maxAttempts=2000) != -1:
                     mblock = Chem.MolToMolBlock(m3d)
