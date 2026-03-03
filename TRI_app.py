@@ -10,7 +10,7 @@ import numpy as np
 # 1. إعدادات الصفحة
 st.set_page_config(page_title="Chemical Isomer Analysis", layout="wide")
 
-# 2. النوت العلمية
+# 2. النوت العلمية بالستايل المطلوب
 st.markdown("""
 <div style="background-color: #fdf2f2; padding: 15px; border-radius: 10px; border-left: 5px solid #800000; margin-bottom: 20px;">
     <strong style="color: #800000; font-size: 1.2em;">Stereoisomerism Reference Guide:</strong><br>
@@ -20,20 +20,23 @@ st.markdown("""
         <li>3. <b>R / S (Optical):</b> Absolute configuration of chiral centers.</li>
         <li>4. <b>Ra / Sa (Axial):</b> Stereochemistry of Allenes (C=C=C).</li>
     </ul>
+    <small style="color: #555;">*Note: E/Z is required when all 4 groups on the double bond are different.</small>
 </div>
 """, unsafe_allow_html=True)
 
 st.markdown("<h2 style='color: #800000; font-family: serif; border-bottom: 2px solid #dcdde1;'>Professional Isomer Analysis System</h2>", unsafe_allow_html=True)
 
-# --- تعديل دالة الرسم لإخفاء الرموز المزعجة ---
+# 3. دالة الرسم (تظهر R/S وتخفي النصوص الخارجية)
 def render_smart_2d(mol):
+    if mol is None: return None
+    
     m = Chem.Mol(mol)
     is_allene = m.HasSubstructMatch(Chem.MolFromSmarts("C=C=C"))
     
-    # إضافة الهيدروجين لضبط الـ Wedges
+    # إضافة الهيدروجين ضروري للألين لظهور الـ Wedges
     m = Chem.AddHs(m) if is_allene else Chem.RemoveHs(m)
     
-    # استخدام محاولات EmbedMolecule مباشرة لتجنب AttributeError على Streamlit
+    # توليد الإحداثيات والـ Wedges
     if AllChem.EmbedMolecule(m, maxAttempts=5000, randomSeed=42) != -1:
         AllChem.Compute2DCoords(m)
         Chem.WedgeMolBonds(m, m.GetConformer())
@@ -42,9 +45,11 @@ def render_smart_2d(mol):
 
     d_opts = Draw.MolDrawOptions()
     
-    # --- التعديل المطلوب هنا ---
-    d_opts.addStereoAnnotation = False  # إخفاء Ra, Sa, R, S من الرسمة
-    # --------------------------
+    # إظهار R/S و Ra/Sa داخل الرسمة
+    d_opts.addStereoAnnotation = True 
+    
+    # إخفاء النصوص الخارجية (Legend) تماماً
+    d_opts.legendFontSize = 0 
     
     if is_allene:
         d_opts.bondLineWidth = 3.0
@@ -53,11 +58,11 @@ def render_smart_2d(mol):
         d_opts.bondLineWidth = 1.6
         d_opts.minFontSize = 14
 
-    # استخدام legend="" لإخفاء أي نص تلقائي (مثل Search Bitter)
+    # نرسل الـ legend كـ string فارغ لإزالة أي اسم مخفي
     img = Draw.MolToImage(m, size=(500, 500), options=d_opts, legend="")
     return img
 
-# دالة حساب Ra/Sa (تظل كما هي للحساب البرمجي فقط)
+# 4. دالة حساب Ra/Sa للألين برمجياً (للعنوان فقط)
 def get_allene_stereo(mol):
     try:
         m = Chem.AddHs(mol)
@@ -70,8 +75,8 @@ def get_allene_stereo(mol):
                     if nb.GetIdx() == b.GetIdx(): continue
                     if nb.GetBondType() == Chem.BondType.DOUBLE:
                         a3 = nb.GetOtherAtom(a2)
-                        l_subs = sorted([n for n in a1.GetNeighbors() if n.GetIdx()!=a2.Idx()], key=lambda x: x.GetAtomicNum(), reverse=True)
-                        r_subs = sorted([n for n in a3.GetNeighbors() if n.GetIdx()!=a2.Idx()], key=lambda x: x.GetAtomicNum(), reverse=True)
+                        l_subs = sorted([n for n in a1.GetNeighbors() if n.GetIdx()!=a2.GetIdx()], key=lambda x: x.GetAtomicNum(), reverse=True)
+                        r_subs = sorted([n for n in a3.GetNeighbors() if n.GetIdx()!=a2.GetIdx()], key=lambda x: x.GetAtomicNum(), reverse=True)
                         if l_subs and r_subs:
                             p1, p3 = np.array(conf.GetAtomPosition(a1.GetIdx())), np.array(conf.GetAtomPosition(a3.GetIdx()))
                             pl, pr = np.array(conf.GetAtomPosition(l_subs[0].GetIdx())), np.array(conf.GetAtomPosition(r_subs[0].GetIdx()))
@@ -80,8 +85,8 @@ def get_allene_stereo(mol):
     except: return ""
     return ""
 
-# --- تعديل المدخلات (جعل السيرش بار يبدأ فارغاً) ---
-name = st.text_input("Enter Structure Name:", value="") 
+# 5. المدخلات (تبدأ فارغة)
+name = st.text_input("Enter Structure Name (e.g., 2,3-pentadiene or Glucose):", value="")
 
 if st.button("Analyze & Visualize") and name:
     try:
@@ -90,6 +95,7 @@ if st.button("Analyze & Visualize") and name:
             base_mol = Chem.MolFromSmiles(results[0].smiles)
             pattern = Chem.MolFromSmarts("C=C=C")
             
+            # معالجة الألين يدوياً لضمان التعرف على الكيرالية المحورية
             if base_mol.HasSubstructMatch(pattern):
                 for match in base_mol.GetSubstructMatches(pattern):
                     base_mol.GetAtomWithIdx(match[0]).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
@@ -97,6 +103,7 @@ if st.button("Analyze & Visualize") and name:
             opts = StereoEnumerationOptions(tryEmbedding=True, onlyUnassigned=False)
             isomers = list(EnumerateStereoisomers(base_mol, options=opts))
             
+            # ضمان وجود أيزومرين في حالة الألين المسطح
             if len(isomers) == 1 and base_mol.HasSubstructMatch(pattern):
                 iso2 = Chem.Mol(isomers[0])
                 for a in iso2.GetAtoms():
@@ -113,19 +120,20 @@ if st.button("Analyze & Visualize") and name:
                 with cols[i]:
                     iso.ClearComputedProps()
                     Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
-                    axial = get_allene_stereo(iso)
                     
+                    # الحصول على النوع (Ra/Sa) للألين أو (R/S) للعادي
+                    axial = get_allene_stereo(iso)
                     if i > 0 and axial in isomers_names:
                         axial = "Sa" if isomers_names[0] == "Ra" else "Ra"
                     isomers_names.append(axial)
 
-                    # كتابة العنوان فوق الصورة
+                    # كتابة النوع فوق الصورة (خارج إطار الرسمة)
                     st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{axial}</span>", unsafe_allow_html=True)
                     
-                    # الرسم النظيف
+                    # الرسم الـ 2D المطور (الذي يحتوي على R/S و Wedges فقط)
                     st.image(render_smart_2d(iso), use_container_width=True)
                     
-                    # العرض 3D
+                    # العرض الـ 3D
                     m3d = Chem.AddHs(iso)
                     if AllChem.EmbedMolecule(m3d, maxAttempts=2000) != -1:
                         mblock = Chem.MolToMolBlock(m3d)
@@ -137,4 +145,4 @@ if st.button("Analyze & Visualize") and name:
         else:
             st.error("Compound not found.")
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Something went wrong: {e}")
