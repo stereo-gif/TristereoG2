@@ -20,20 +20,25 @@ st.markdown("""
         <li>3. <b>R / S (Optical):</b> Absolute configuration of chiral centers.</li>
         <li>4. <b>Ra / Sa (Axial):</b> Stereochemistry of Allenes (C=C=C).</li>
     </ul>
-    <small style="color: #555;">*Note: E/Z is required when all 4 groups on the double bond are different.</small>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("<h2 style='color: #800000; font-family: serif; border-bottom: 2px solid #dcdde1;'>Professional Isomer Analysis System</h2>", unsafe_allow_html=True)
+# دالة لتحديد نوع الرابطة المزدوجة (Cis/Trans أو E/Z) للعنوان
+def get_bond_stereo_label(mol):
+    labels = []
+    for bond in mol.GetBonds():
+        if bond.GetBondType() == Chem.BondType.DOUBLE:
+            stereo = bond.GetStereo()
+            if stereo == Chem.BondStereo.STEREOCIS: labels.append("Cis")
+            elif stereo == Chem.BondStereo.STEREOTRANS: labels.append("Trans")
+            elif stereo == Chem.BondStereo.STEREOE: labels.append("E")
+            elif stereo == Chem.BondStereo.STEREOZ: labels.append("Z")
+    return " / ".join(labels) if labels else ""
 
-# 3. دالة الرسم المصححة (تجنب الـ AttributeError)
+# 3. دالة الرسم (R/S فقط داخل الرسمة)
 def render_smart_2d(mol):
     if mol is None: return None
-    
     m = Chem.Mol(mol)
-    # تفعيل حسابات الكيمياء الفراغية
-    Chem.AssignStereochemistry(m, force=True, cleanIt=True)
-    
     is_allene = m.HasSubstructMatch(Chem.MolFromSmarts("C=C=C"))
     m = Chem.AddHs(m) if is_allene else Chem.RemoveHs(m)
     
@@ -43,25 +48,8 @@ def render_smart_2d(mol):
     else:
         AllChem.Compute2DCoords(m)
 
-    # إضافة الملاحظات يدوياً على الروابط (Cis/Trans/E/Z)
-    for bond in m.GetBonds():
-        if bond.GetBondType() == Chem.BondType.DOUBLE:
-            stereo = bond.GetStereo()
-            label = ""
-            if stereo == Chem.BondStereo.STEREOCIS: label = "Cis"
-            elif stereo == Chem.BondStereo.STEREOTRANS: label = "Trans"
-            elif stereo == Chem.BondStereo.STEREOE: label = "E"
-            elif stereo == Chem.BondStereo.STEREOZ: label = "Z"
-            
-            if label:
-                # استخدام SetProp لكتابة النص فوق الرابطة مباشرة
-                bond.SetProp("bondNote", label)
-
     d_opts = Draw.MolDrawOptions()
-    d_opts.addStereoAnnotation = True # لإظهار R/S و Ra/Sa
-    
-    # حل مشكلة الـ AttributeError: نستخدم الخصائص الأساسية فقط
-    d_opts.prepareMolsBeforeDrawing = True
+    d_opts.addStereoAnnotation = True # لإظهار R/S و Ra/Sa جوه الرسمة
     d_opts.legendFontSize = 0 
     
     if is_allene:
@@ -74,7 +62,7 @@ def render_smart_2d(mol):
     img = Draw.MolToImage(m, size=(500, 500), options=d_opts, legend="")
     return img
 
-# 4. دالة حساب Ra/Sa (للعنوان)
+# 4. دالة حساب Ra/Sa للألين (للعنوان)
 def get_allene_stereo(mol):
     try:
         m = Chem.AddHs(mol)
@@ -101,54 +89,55 @@ def get_allene_stereo(mol):
 name = st.text_input("Enter Structure Name:", value="")
 
 if st.button("Analyze & Visualize") and name:
-    try:
-        results = pcp.get_compounds(name, 'name')
-        if results:
-            base_mol = Chem.MolFromSmiles(results[0].smiles)
-            pattern = Chem.MolFromSmarts("C=C=C")
-            
-            if base_mol.HasSubstructMatch(pattern):
-                for match in base_mol.GetSubstructMatches(pattern):
-                    base_mol.GetAtomWithIdx(match[0]).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+    results = pcp.get_compounds(name, 'name')
+    if results:
+        base_mol = Chem.MolFromSmiles(results[0].smiles)
+        pattern = Chem.MolFromSmarts("C=C=C")
+        
+        if base_mol.HasSubstructMatch(pattern):
+            for match in base_mol.GetSubstructMatches(pattern):
+                base_mol.GetAtomWithIdx(match[0]).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
 
-            opts = StereoEnumerationOptions(tryEmbedding=True, onlyUnassigned=False)
-            isomers = list(EnumerateStereoisomers(base_mol, options=opts))
-            
-            if len(isomers) == 1 and base_mol.HasSubstructMatch(pattern):
-                iso2 = Chem.Mol(isomers[0])
-                for a in iso2.GetAtoms():
-                    tag = a.GetChiralTag()
-                    if tag == Chem.ChiralType.CHI_TETRAHEDRAL_CW: a.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
-                    elif tag == Chem.ChiralType.CHI_TETRAHEDRAL_CCW: a.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
-                isomers.append(iso2)
+        opts = StereoEnumerationOptions(tryEmbedding=True, onlyUnassigned=False)
+        isomers = list(EnumerateStereoisomers(base_mol, options=opts))
+        
+        # حالة الألين
+        if len(isomers) == 1 and base_mol.HasSubstructMatch(pattern):
+            iso2 = Chem.Mol(isomers[0])
+            for a in iso2.GetAtoms():
+                tag = a.GetChiralTag()
+                if tag == Chem.ChiralType.CHI_TETRAHEDRAL_CW: a.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
+                elif tag == Chem.ChiralType.CHI_TETRAHEDRAL_CCW: a.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+            isomers.append(iso2)
 
-            st.write("---")
-            isomers_names = [] 
-            cols = st.columns(len(isomers))
-            
-            for i, iso in enumerate(isomers):
-                with cols[i]:
-                    iso.ClearComputedProps()
-                    Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
-                    
-                    label = get_allene_stereo(iso)
-                    if i > 0 and label in isomers_names:
-                        label = "Sa" if isomers_names[0] == "Ra" else "Ra"
-                    isomers_names.append(label)
-
-                    st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{label}</span>", unsafe_allow_html=True)
-                    st.image(render_smart_2d(iso), use_container_width=True)
-                    
-                    # عرض 3D
-                    m3d = Chem.AddHs(iso)
-                    if AllChem.EmbedMolecule(m3d, maxAttempts=2000) != -1:
-                        mblock = Chem.MolToMolBlock(m3d)
-                        view = py3Dmol.view(width=300, height=300)
-                        view.addModel(mblock, 'mol')
-                        view.setStyle({'stick': {}, 'sphere': {'scale': 0.3}})
-                        view.zoomTo()
-                        showmol(view)
-        else:
-            st.error("Compound not found.")
-    except Exception as e:
-        st.error(f"Error: {e}")
+        st.write("---")
+        cols = st.columns(len(isomers))
+        
+        for i, iso in enumerate(isomers):
+            with cols[i]:
+                iso.ClearComputedProps()
+                Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
+                
+                # تحديد العناوين بناءً على القواعد
+                axial_label = get_allene_stereo(iso) # للألين (Ra/Sa)
+                bond_label = get_bond_stereo_label(iso) # للـ Cis/Trans أو E/Z
+                
+                # دمج العناوين للعرض تحت Isomer X
+                display_label = axial_label if axial_label else bond_label
+                
+                st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{display_label}</span>", unsafe_allow_html=True)
+                
+                # الرسم (R/S تظهر هنا تلقائياً لو موجودة)
+                st.image(render_smart_2d(iso), use_container_width=True)
+                
+                # 3D View
+                m3d = Chem.AddHs(iso)
+                if AllChem.EmbedMolecule(m3d, maxAttempts=2000) != -1:
+                    mblock = Chem.MolToMolBlock(m3d)
+                    view = py3Dmol.view(width=300, height=300)
+                    view.addModel(mblock, 'mol')
+                    view.setStyle({'stick': {}, 'sphere': {'scale': 0.3}})
+                    view.zoomTo()
+                    showmol(view)
+    else:
+        st.error("Compound not found.")
