@@ -26,7 +26,7 @@ st.markdown("""
 
 st.markdown("<h2 style='color: #800000; font-family: serif; border-bottom: 2px solid #dcdde1;'>Professional Isomer Analysis System</h2>", unsafe_allow_html=True)
 
-# 3. دالة الرسم الاحترافية (تطبق قواعد النوتس الثلاثة)
+# 3. دالة الرسم المصححة (تجنب الـ AttributeError)
 def render_smart_2d(mol):
     if mol is None: return None
     
@@ -37,37 +37,31 @@ def render_smart_2d(mol):
     is_allene = m.HasSubstructMatch(Chem.MolFromSmarts("C=C=C"))
     m = Chem.AddHs(m) if is_allene else Chem.RemoveHs(m)
     
-    # محاولة توليد إحداثيات لضبط الـ Wedges
     if AllChem.EmbedMolecule(m, maxAttempts=5000, randomSeed=42) != -1:
         AllChem.Compute2DCoords(m)
         Chem.WedgeMolBonds(m, m.GetConformer())
     else:
         AllChem.Compute2DCoords(m)
 
-    # تطبيق تسميات Cis/Trans و E/Z يدوياً بناءً على النوتس
+    # إضافة الملاحظات يدوياً على الروابط (Cis/Trans/E/Z)
     for bond in m.GetBonds():
         if bond.GetBondType() == Chem.BondType.DOUBLE:
             stereo = bond.GetStereo()
-            # القاعدة 1: Cis / Trans
-            if stereo == Chem.BondStereo.STEREOCIS:
-                bond.SetProp("bondNote", "Cis")
-            elif stereo == Chem.BondStereo.STEREOTRANS:
-                bond.SetProp("bondNote", "Trans")
-            # القاعدة 2: E / Z
-            elif stereo == Chem.BondStereo.STEREOE:
-                bond.SetProp("bondNote", "E")
-            elif stereo == Chem.BondStereo.STEREOZ:
-                bond.SetProp("bondNote", "Z")
+            label = ""
+            if stereo == Chem.BondStereo.STEREOCIS: label = "Cis"
+            elif stereo == Chem.BondStereo.STEREOTRANS: label = "Trans"
+            elif stereo == Chem.BondStereo.STEREOE: label = "E"
+            elif stereo == Chem.BondStereo.STEREOZ: label = "Z"
+            
+            if label:
+                # استخدام SetProp لكتابة النص فوق الرابطة مباشرة
+                bond.SetProp("bondNote", label)
 
     d_opts = Draw.MolDrawOptions()
+    d_opts.addStereoAnnotation = True # لإظهار R/S و Ra/Sa
     
-    # القاعدة 3 و 4: إظهار R/S و Ra/Sa فوق الذرات
-    d_opts.addStereoAnnotation = True 
-    
-    # تفعيل إظهار نصوص الروابط (Cis/Trans/E/Z)
-    d_opts.addBondLabelAnnotations = True 
-    
-    # إخفاء النصوص الخارجية (Legend)
+    # حل مشكلة الـ AttributeError: نستخدم الخصائص الأساسية فقط
+    d_opts.prepareMolsBeforeDrawing = True
     d_opts.legendFontSize = 0 
     
     if is_allene:
@@ -80,7 +74,7 @@ def render_smart_2d(mol):
     img = Draw.MolToImage(m, size=(500, 500), options=d_opts, legend="")
     return img
 
-# 4. دالة حساب Ra/Sa للألين برمجياً (للعنوان)
+# 4. دالة حساب Ra/Sa (للعنوان)
 def get_allene_stereo(mol):
     try:
         m = Chem.AddHs(mol)
@@ -104,7 +98,7 @@ def get_allene_stereo(mol):
     return ""
 
 # 5. واجهة المستخدم
-name = st.text_input("Enter Structure Name (e.g., Cis-2-butene, Glucose, 2,3-pentadiene):", value="")
+name = st.text_input("Enter Structure Name:", value="")
 
 if st.button("Analyze & Visualize") and name:
     try:
