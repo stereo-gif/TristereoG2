@@ -10,7 +10,7 @@ import numpy as np
 # 1. إعدادات الصفحة
 st.set_page_config(page_title="Chemical Isomer Analysis", layout="wide")
 
-# 2. النوت العلمية
+# 2. النوت العلمية (المرجع الخاص بك)
 st.markdown("""
 <div style="background-color: #fdf2f2; padding: 15px; border-radius: 10px; border-left: 5px solid #800000; margin-bottom: 20px;">
     <strong style="color: #800000; font-size: 1.2em;">Stereoisomerism Reference Guide:</strong><br>
@@ -20,24 +20,42 @@ st.markdown("""
         <li>3. <b>R / S (Optical):</b> Absolute configuration of chiral centers.</li>
         <li>4. <b>Ra / Sa (Axial):</b> Stereochemistry of Allenes (C=C=C).</li>
     </ul>
+    <small style="color: #555;">*Note: E/Z is required when all 4 groups on the double bond are different.</small>
 </div>
 """, unsafe_allow_html=True)
 
-# دالة ذكية لاستخراج مسمى Cis/Trans أو E/Z للعنوان
-def get_detailed_stereo_label(mol):
-    # إجبار RDKit على إيجاد مراكز الـ Stereo في الروابط
-    si = Chem.FindPotentialStereoBonds(mol)
+# دالة ذكية للتفرقة بين Cis/Trans و E/Z حسب عدد المجموعات (تطبيق النوتس)
+def get_custom_bond_label(mol):
     labels = []
     for bond in mol.GetBonds():
         if bond.GetBondType() == Chem.BondType.DOUBLE:
+            # الحصول على الذرات المرتبطة بالرابطة المزدوجة
+            a1 = bond.GetBeginAtom()
+            a2 = bond.GetEndAtom()
+            
+            # جمع أنواع الذرات (أو المجموعات) المحيطة بالرابطة
+            substituents = []
+            for n in a1.GetNeighbors():
+                if n.GetIdx() != a2.GetIdx(): substituents.append(n.GetSymbol())
+            for n in a2.GetNeighbors():
+                if n.GetIdx() != a1.GetIdx(): substituents.append(n.GetSymbol())
+            
+            # فحص عدد المجموعات الفريدة
+            unique_subs = set(substituents)
             stereo = bond.GetStereo()
             
-            # محاولة قراءة المسمى المباشر
-            if stereo == Chem.BondStereo.STEREOCIS: labels.append("Cis")
-            elif stereo == Chem.BondStereo.STEREOTRANS: labels.append("Trans")
-            elif stereo == Chem.BondStereo.STEREOE: labels.append("E")
-            elif stereo == Chem.BondStereo.STEREOZ: labels.append("Z")
-            
+            # تطبيق القاعدة: لو فيه مجموعات متطابقة (Identical) -> Cis/Trans
+            # لو الأربعة مختلفين (أو مفيش تكرار واضح) -> E/Z
+            if len(unique_subs) < len(substituents) or len(substituents) < 4:
+                if stereo == Chem.BondStereo.STEREOCIS or stereo == Chem.BondStereo.STEREOZ:
+                    labels.append("Cis")
+                elif stereo == Chem.BondStereo.STEREOTRANS or stereo == Chem.BondStereo.STEREOE:
+                    labels.append("Trans")
+            else:
+                # القاعدة 2: E/Z لما الـ 4 مجموعات يكونوا مختلفين
+                if stereo == Chem.BondStereo.STEREOE: labels.append("E")
+                elif stereo == Chem.BondStereo.STEREOZ: labels.append("Z")
+                
     return " / ".join(labels) if labels else ""
 
 # 3. دالة الرسم (R/S تظهر داخل الرسمة فقط)
@@ -54,7 +72,7 @@ def render_smart_2d(mol):
         AllChem.Compute2DCoords(m)
 
     d_opts = Draw.MolDrawOptions()
-    d_opts.addStereoAnnotation = True  # لإظهار R/S و Ra/Sa
+    d_opts.addStereoAnnotation = True # لظهور R/S و Ra/Sa
     d_opts.legendFontSize = 0 
     
     if is_allene:
@@ -96,11 +114,8 @@ name = st.text_input("Enter Structure Name:", value="")
 if st.button("Analyze & Visualize") and name:
     results = pcp.get_compounds(name, 'name')
     if results:
-        # تحويل الـ SMILES لموليكيول مع الحفاظ على كيمياء الروابط
-        smiles = results[0].smiles
-        base_mol = Chem.MolFromSmiles(smiles)
-        
-        # تفعيل كيمياء الروابط المزدوجة
+        base_mol = Chem.MolFromSmiles(results[0].smiles)
+        # تفعيل حسابات الكيمياء الفراغية
         Chem.AssignStereochemistry(base_mol, force=True, cleanIt=True)
         
         pattern = Chem.MolFromSmarts("C=C=C")
@@ -111,7 +126,7 @@ if st.button("Analyze & Visualize") and name:
         opts = StereoEnumerationOptions(tryEmbedding=True, onlyUnassigned=False)
         isomers = list(EnumerateStereoisomers(base_mol, options=opts))
         
-        # تصحيح للألينات لو لم يتم توليد أيزومرين
+        # تصحيح الألين
         if len(isomers) == 1 and base_mol.HasSubstructMatch(pattern):
             iso2 = Chem.Mol(isomers[0])
             for a in iso2.GetAtoms():
@@ -125,23 +140,19 @@ if st.button("Analyze & Visualize") and name:
         
         for i, iso in enumerate(isomers):
             with cols[i]:
-                # مسح الحسابات القديمة وإعادة الحساب بدقة لكل أيزومر
                 iso.ClearComputedProps()
                 Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
                 
-                # جلب العنوان (Cis/Trans أو E/Z)
-                bond_label = get_detailed_stereo_label(iso)
-                # جلب عنوان الألين (Ra/Sa)
-                axial_label = get_allene_stereo(iso)
+                # فحص القواعد بالترتيب
+                axial_label = get_allene_stereo(iso) 
+                bond_label = get_custom_bond_label(iso)
                 
-                # الأولوية للعنوان المتاح
                 final_label = axial_label if axial_label else bond_label
                 
                 st.markdown(f"#### Isomer {i+1}: <span style='color: #800000;'>{final_label}</span>", unsafe_allow_html=True)
-                
                 st.image(render_smart_2d(iso), use_container_width=True)
                 
-                # 3D
+                # عرض 3D
                 m3d = Chem.AddHs(iso)
                 if AllChem.EmbedMolecule(m3d, maxAttempts=2000) != -1:
                     mblock = Chem.MolToMolBlock(m3d)
